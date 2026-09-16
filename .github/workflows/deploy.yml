@@ -1,3 +1,13 @@
+# HumsYarX — استقرار خودکار روی VPS با هر push به main
+#
+# پیش‌نیاز (یک‌بار): سه Secret در گیت‌هاب
+#   Settings → Secrets and variables → Actions → New repository secret
+#   VPS_HOST    = آی‌پی سرور (مثل 45.74.158.153)
+#   VPS_USER    = نام کاربر SSH (مثل root)
+#   VPS_SSH_KEY = کلید خصوصی (کل متن -----BEGIN ... END-----)
+#
+# روی سرور هم باید یک‌بار دستی مستقر شده باشد در: /srv/humsyarx
+
 name: Deploy to VPS
 
 on:
