@@ -7,6 +7,10 @@
 #   VPS_SSH_KEY = کلید خصوصی (کل متن -----BEGIN ... END-----)
 #
 # روی سرور هم باید یک‌بار دستی مستقر شده باشد در: /srv/humsyarx
+#
+# نکته‌ی مهم (سرور ۱ گیگی!): ریبیلد فقط وقتی انجام می‌شود که فایل‌های
+# اجرایی عوض شده باشند. اگر چیزی عوض نشده یا فقط .github / md عوض شده،
+# بدون ریبیلد فقط مطمئن می‌شود سرویس‌ها بالا هستند (سبک و سریع).
 
 name: Deploy to VPS
 
@@ -32,7 +36,25 @@ jobs:
           script: |
             set -e
             cd /srv/humsyarx
+            BEFORE=$(git rev-parse HEAD)
             git pull --ff-only
+            AFTER=$(git rev-parse HEAD)
+            if [ "$BEFORE" = "$AFTER" ]; then
+              echo "NO-CHANGES: same commit, skipping rebuild."
+              docker compose up -d --no-deps app caddy
+              docker compose exec -T app curl -fsS http://127.0.0.1:8000/api/health
+              exit 0
+            fi
+            RUNTIME_CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" | grep -v -e '^\.github/' -e '\.md$' || true)
+            if [ -z "$RUNTIME_CHANGED" ]; then
+              echo "NON-RUNTIME-ONLY changes, skipping rebuild:"
+              git diff --name-only "$BEFORE" "$AFTER"
+              docker compose up -d --no-deps app caddy
+              docker compose exec -T app curl -fsS http://127.0.0.1:8000/api/health
+              exit 0
+            fi
+            echo "Runtime files changed, rebuilding:"
+            echo "$RUNTIME_CHANGED"
             docker compose up -d --build --no-deps app caddy
             for i in $(seq 1 12); do
               docker compose exec -T app curl -fsS http://127.0.0.1:8000/api/health && break || sleep 10
