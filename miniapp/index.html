@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#070B14" />
+  <title>هامزیار</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+  <script>
+    /* 🧯 نگهبان مونت: اگر ۹ ثانیه بعد از لود،
+       روت خالی بود یعنی JS اصلاً اجرا نشده
+       (خطای باندل/شبکه در ری‌دیپلوی) — به‌جای
+       صفحه‌ی تاریکِ بی‌سرنخ، پیام بازیابی بده */
+    setTimeout(function () {
+      var root = document.getElementById('root');
+      if (!root || root.firstChild) return;
+
+      root.setAttribute('dir', 'rtl');
+      root.innerHTML =
+        '<div style="min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:24px;font-family:Tahoma,sans-serif">' +
+        '<div style="max-width:360px;width:100%;padding:22px;text-align:center;background:linear-gradient(180deg,rgba(255,255,255,.035),transparent 44%),rgba(16,24,39,.94);border:1px solid rgba(148,163,184,.13);border-radius:18px;color:#F8FAFC">' +
+        '<div style="font-size:40px">🩺</div>' +
+        '<h1 style="margin:12px 0 8px;font-size:17px;font-weight:800">هامزیار بارگذاری نشد</h1>' +
+        '<p style="color:#B4C0D4;font-size:11px;line-height:1.9">مشکل موقتی در اتصال یا نسخه‌ی برنامه؛ معمولاً با یک بارگذاری مجدد حل می‌شود.</p>' +
+        '<button onclick="location.reload()" style="margin-top:14px;width:100%;min-height:42px;border:0;border-radius:13px;background:linear-gradient(135deg,#1D4ED8,#3B82F6 55%,#22D3EE);color:#fff;font-size:13px;font-weight:800;font-family:inherit;cursor:pointer">↻ تلاش دوباره</button>' +
+        '</div></div>';
+    }, 9000);
+  </script>
+</body>
+</html>
