@@ -23,7 +23,7 @@ jobs:
             set -e
             cd /srv/humsyarx
             git pull --ff-only
-            docker compose up -d --build
+            docker compose up -d --build --no-deps app caddy
             for i in $(seq 1 12); do
               docker compose exec -T app curl -fsS http://127.0.0.1:8000/api/health && break || sleep 10
             done
