@@ -21,6 +21,12 @@ on:
       - '**.md'
   workflow_dispatch:
 
+# اگر دو push پشت سر هم آمد، ران‌ها صف می‌شوند (نه موازی) تا روی
+# سرور ۱ گیگی دو بیلد همزمان لود را منفجر نکند.
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Pull + rebuild on VPS
