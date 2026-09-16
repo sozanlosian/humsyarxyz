@@ -1,0 +1,16 @@
+🌊 W8 (v2 — با Retry-After و لاگ تشخیصی ۴۲۹) — راهنمای ادغام
+
+تغییر v2 نسبت به ZIP قبلی: فقط ai_solver.py (رعایت هدر Retry-After،
+لاگ بدنه‌ی پاسخ ۴۲۹ برای تشخیص سهمیه، پیام دقیق‌تر نرخ‌محدود) و
+tests/test_w8_image_gen.py (۳ تست جدید). اگر v1 را مرج کرده‌اید،
+کافیست همین دو فایل را جایگزین کنید.
+
+فایل‌های جدید (مستقیم کپی شوند):
+  miniapp/src/pages/Ai/AiImage.jsx
+  tests/test_w8_image_gen.py
+
+۹ فایل مشترک: اگر ریپوی شما موج‌های W6/اصلاح-آپلود/W7 را دارد،
+overwrite نکنید؛ پچ را بزنید:
+  git apply --3way w8-image-gen.patch
+
+فایل‌های w8-image-gen.patch و MERGE-NOTE جزو ریپو نیستند.

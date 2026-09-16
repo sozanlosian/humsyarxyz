@@ -1,0 +1,23 @@
+python-telegram-bot[job-queue]==21.3
+motor==3.3.2
+pymongo==4.6.1
+python-dotenv==1.0.0
+jdatetime==5.2.0
+openpyxl==3.1.5
+psutil==7.2.2
+reportlab==4.4.10
+arabic-reshaper==3.0.1
+python-bidi==0.6.11
+httpx==0.28.1  # 🌊 W10/PIN-01 (tested; py>=3.8)
+imageio-ffmpeg==0.6.0  # 🌊 W10/PIN-01 (py>=3.9)
+fastapi==0.115.4
+# 🚀 موج ۴.۶۰ — uvicorn[standard]: uvloop + httptools روی Railway
+# (لینوکس) حلقه‌ی رویداد و parser سریع‌تر می‌دهند؛ بدون هزینه‌ی کد.
+uvicorn[standard]==0.32.0
+pydantic==2.9.2
+python-multipart==0.0.20
+qrcode[pil]==8.2  # 👑 P2 — QR اشتراک HeroCard (SVG سروری)
+pyrogram==2.0.106
+tgcrypto==1.2.5
+# 🛡 W1 — at-rest encryption for secrets (Fernet)
+cryptography==50.0.1  # 🌊 W10/PIN-01 (py>=3.9; Fernet API stable)

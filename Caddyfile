@@ -1,0 +1,5 @@
+# HumsYarX — Caddy: همه‌ی ترافیک دامنه به اپ (HTTPS خودکار با Let's Encrypt)
+# DOMAIN از env کانتینر caddy می‌آید (compose آن را از .env می‌خواند)
+{$DOMAIN} {
+	reverse_proxy app:8000
+}

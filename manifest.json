@@ -1,0 +1,122 @@
+{
+  "generated_at": "2026-09-08T16:58:13.125328Z",
+  "version": "Users Investigation+Diagnostics — 20260908_165812",
+  "files": [
+    {
+      "path": "audit.py",
+      "sha256": "03659af2ce821adc5ee2bb3796dcf8dbd481cae30f40afd12b1332ae33e34737",
+      "size": 52329
+    },
+    {
+      "path": "db/core.py",
+      "sha256": "b0c57cb32f18de60bf68eba122b338cc6057347dbdfa3c0cfe7c5551ab92062f",
+      "size": 206806
+    },
+    {
+      "path": "utils.py",
+      "sha256": "9b29baafd314a4cf84e323ffc8eb88e52d7f09c765d0828d2c13f562620b3b83",
+      "size": 43609
+    },
+    {
+      "path": "content_admin.py",
+      "sha256": "933c17b07f7e4e21e7eae91a9caed9b976c188d62c890973e6b50e0165d3a3f8",
+      "size": 110252
+    },
+    {
+      "path": "admin.py",
+      "sha256": "9a7f6e663ee064711ad4c7c65116c1c1c26cf1ffc79199ccea3c0e0fc350c07f",
+      "size": 205980
+    },
+    {
+      "path": "subscription_admin.py",
+      "sha256": "1e8ff21898dafd22c299089931af36b281c9ec59db3f12a0324c10588151e6d8",
+      "size": 64718
+    },
+    {
+      "path": "api/main.py",
+      "sha256": "299cb4bd89bf92d8ccea4d04449440a5049ac810b7a02b44e36cb6efe2853238",
+      "size": 33473
+    },
+    {
+      "path": "api/routers/admin_panel.py",
+      "sha256": "c3de93eb828090084eac47ae6a459a8a887614a66c375450d446f1bcfe061744",
+      "size": 78015
+    },
+    {
+      "path": "api/routers/subscription.py",
+      "sha256": "2b0a74410fde4479f6952fc35675e83dc324da2a9afc79ca60b6c2bcc226be14",
+      "size": 33856
+    },
+    {
+      "path": "api/routers/profile.py",
+      "sha256": "191d9a1d0f18774f002c0aa944b84bc49b3784fe428eec675dc64d888a5dc3d6",
+      "size": 14974
+    },
+    {
+      "path": "api/routers/notifications.py",
+      "sha256": "bb92bf793c225e27ac65b2201f9aa45c1d45383afef4228d99ca3d64844a881f",
+      "size": 5853
+    },
+    {
+      "path": "api/routers/reports.py",
+      "sha256": "7209e01ac72f15bbaa93626516781254f7843d35c14950f533444070e057d028",
+      "size": 3925
+    },
+    {
+      "path": "api/routers/tickets.py",
+      "sha256": "3087bde169dabc28c801c57adf17b004f910f07fe67a9a323a6e8d473aba2b21",
+      "size": 6776
+    },
+    {
+      "path": "api/routers/ai_management.py",
+      "sha256": "40d49f3e80f26eeda52f81f6a26885b7bf938c28c3790b0b677f5eb974748e81",
+      "size": 11242
+    },
+    {
+      "path": "api/routers/web_admin.py",
+      "sha256": "acb248cffd390ff1597124916b21fa0e2e0bb520c3b5453e0b55a5bfa24ad28c",
+      "size": 371817
+    },
+    {
+      "path": "ticket.py",
+      "sha256": "d3c0e720929813d8c5ffa15dd4d966cdf3a7d8ebd3d5694b6d0eba7ce9f5080d",
+      "size": 44354
+    },
+    {
+      "path": "profile.py",
+      "sha256": "f0d26e48657c39eaab14e4cd5f09b173f9798d250a57697cfc70cfac6d5f4581",
+      "size": 25852
+    },
+    {
+      "path": "subscription.py",
+      "sha256": "faac9378d9a1ed75a57e0cf42e06ee10814f07ea5fbdbdd6f4915de8a93350ff",
+      "size": 63492
+    },
+    {
+      "path": "api/routers/content_admin.py",
+      "sha256": "97ba1ce8168c4bc5faeee3bb0247230143a3fb18a3eff37d17f51494104f89e8",
+      "size": 85670
+    },
+    {
+      "path": "webadmin/src/styles.css",
+      "sha256": "87b1b7e08fc2350b667686d32a8b83f5e177c108121f076a6933239b225a615c",
+      "size": 114671
+    },
+    {
+      "path": "webadmin/src/pages/Dashboard.jsx",
+      "sha256": "d15799dcf4d40bbd953680a680eb11bd8758fa3263882fff69b463e50d93f9e3",
+      "size": 22712
+    },
+    {
+      "path": "webadmin/src/HealthCenter.jsx",
+      "sha256": "654f3ca70817568006c771e5c315e2be831fbcdddb79d500363f254e6d9edc4c",
+      "size": 9317
+    },
+    {
+      "path": "webadmin/src/pages/Users.jsx",
+      "sha256": "fc1b9e2559449a343e3e31bc387cc51a1434da444fad8c2d3e72183a643dd111",
+      "size": 145353
+    }
+  ],
+  "notes": "Runtime only — 5 Intelligence features: Why Access / Investigation Workspace / Journey Replay / Snapshot Compare / Recommended Next Action — Evidence First — No mock — Preserved 19 py + 4 webadmin — Build 56 modules"
+}

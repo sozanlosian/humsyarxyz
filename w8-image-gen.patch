@@ -1,0 +1,812 @@
+--- a/ai_solver.py
++++ b/ai_solver.py
+@@ -46,6 +46,174 @@
+ DEFAULT_LIMIT  = 15   # سقف روزانه‌ی هر کاربر عادی؛ 0 = نامحدود
+ MAX_INPUT_CHARS = 2000  # سقف طول متن ورودی کاربر (جلوگیری از هدررفت توکن/هزینه)
+ 
++# 🎨 تولید تصویر — مدل/کرانه‌ها از settings قابل تغییرند (ai_image_model و
++# ai_image_daily_limit)؛ اینها فقط پیش‌فرض‌اند. aspect ratioها همان فهرست
++# رسمی gemini-2.5-flash-image (نانوبانانا) است.
++DEFAULT_IMAGE_MODEL = 'gemini-2.5-flash-image'
++DEFAULT_IMAGE_LIMIT = 10          # سقف روزانه‌ی تصویر؛ 0 = نامحدود
++IMG_RETRY_BASE_DELAY = 0.8        # ثانیه — backoff: 0.8s سپس 1.6s
++IMG_RETRY_AFTER_CAP = 25.0        # سقف پذیرش Retry-After (ثانیه)
++IMAGE_ASPECT_RATIOS = ('1:1', '4:3', '3:4', '16:9', '9:16',
++                       '3:2', '2:3', '21:9', '5:4', '4:5')
++IMAGE_PROMPT_MIN = 3
++IMAGE_PROMPT_MAX = 1000
++
++
++class AiImageError(Exception):
++    """خطای نگاشت‌شده‌ی تولید تصویر — code ماشین‌خوان + پیام امن کاربر.
++    جزئیات خام provider هرگز از اینجا بیرون نمی‌رود."""
++
++    def __init__(self, code: str, user_message: str, detail: str = ''):
++        super().__init__(code)
++        self.code = code
++        self.user_message = user_message
++        self.detail = detail
++
++
++async def generate_image(api_key: str, model: str, prompt: str,
++                         aspect_ratio: str = '1:1',
++                         timeout: int = 90, max_retries: int = 2) -> dict:
++    """🎨 تولید تصویر با Gemini — لایه‌ی provider (مشترک بات/مینی‌اپ).
++
++    - فقط server-side؛ api_key هرگز به کلاینت نمی‌رسد.
++    - retry محدود با backoff روی خطاهای گذرا (429/5xx/شبکه)؛
++      4xxهای معنادار (400/401/403) هرگز retry نمی‌شوند.
++    - خروجی: {'mime': str, 'data_b64': str} — تصویر inline از پاسخ.
++    """
++    aspect_ratio = aspect_ratio if aspect_ratio in IMAGE_ASPECT_RATIOS \
++        else '1:1'
++    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
++           f"{model}:generateContent")
++    payload = {
++        'contents': [{'parts': [{'text': prompt}]}],
++        'generationConfig': {
++            'responseModalities': ['IMAGE'],
++            'imageConfig': {'aspectRatio': aspect_ratio},
++        },
++    }
++    headers = {'Content-Type': 'application/json',
++               'x-goog-api-key': api_key}
++    last_err = None
++    retry_after = None  # ثانیه — از هدر Retry-After پاسخ 429
++    for attempt in range(max_retries + 1):
++        if attempt:
++            if retry_after is not None:
++                if retry_after > IMG_RETRY_AFTER_CAP:
++                    # سقفِ انتظار بی‌فایده است — کاربر را معطل نکن
++                    raise last_err
++                delay = retry_after
++                retry_after = None
++            else:
++                delay = IMG_RETRY_BASE_DELAY * (2 ** (attempt - 1))
++            await _img_sleep(delay)
++        try:
++            async with _image_http_client(timeout) as client:
++                resp = await client.post(url, headers=headers, json=payload)
++        except httpx.TimeoutException as e:
++            last_err = AiImageError('GEMINI_TIMEOUT',
++                                    'ساخت تصویر طول کشید؛ دوباره تلاش کن.')
++            logger.warning("imggen timeout attempt=%s err=%s",
++                           attempt, type(e).__name__)
++            continue  # گذرا — retry مجاز
++        except httpx.HTTPError as e:
++            last_err = AiImageError('GEMINI_UNAVAILABLE',
++                                    'سرویس تصویر در دسترس نیست؛ کمی بعد '
++                                    'دوباره تلاش کن.')
++            logger.warning("imggen network error attempt=%s err=%s",
++                           attempt, type(e).__name__)
++            continue
++        if resp.status_code in (429, 500, 502, 503):
++            # 🩺 بدنه‌ی پاسخِ Google علت دقیق را می‌گوید (مثلاً «سهمیه‌ی
++            # این پروژه برای مدل تصویر صفر است»). برای تشخیص، بریده‌اش را
++            # لاگ کن — بدنه‌ی پاسخ حاوی اطلاعات محرمانه نیست (کلید فقط در
++            # هدرِ درخواست است).
++            try:
++                body_snip = resp.text[:300].replace('\n', ' ')
++            except Exception:
++                body_snip = ''
++            if resp.status_code == 429:
++                last_err = AiImageError(
++                    'GEMINI_RATE_LIMIT',
++                    'سرویس تصویر محدود شده (سهمیه یا ترافیک)؛ چند دقیقه '
++                    'بعد دوباره تلاش کن.')
++                ra = resp.headers.get('Retry-After') or \
++                    resp.headers.get('retry-after')
++                try:
++                    retry_after = float(ra) if ra else None
++                except ValueError:
++                    retry_after = None
++            else:
++                last_err = AiImageError(
++                    'GEMINI_UNAVAILABLE',
++                    'سرویس تصویر در دسترس نیست؛ کمی بعد دوباره تلاش کن.')
++            logger.warning(
++                "imggen transient status=%s attempt=%s retry_after=%s "
++                "body=%s", resp.status_code, attempt, retry_after,
++                body_snip)
++            continue
++        if resp.status_code in (401, 403):
++            raise AiImageError('GEMINI_AUTH_ERROR',
++                               'سرویس تصویر توسط مدیریت آماده نشده است.')
++        if resp.status_code == 400:
++            raise AiImageError('GEMINI_INVALID_REQUEST',
++                               'این درخواست قابل پردازش نیست؛ توضیح تصویر '
++                               'را تغییر بده.')
++        if resp.status_code != 200:
++            raise AiImageError('GEMINI_UNAVAILABLE',
++                               'سرویس تصویر پاسخ نامعتبر داد؛ دوباره '
++                               'تلاش کن.')
++        # ۲۰۰ — parse (بدون retry: خطای محتوا گذرا نیست)
++        try:
++            data = resp.json()
++        except ValueError:
++            raise AiImageError('IMAGE_PARSE_FAILED',
++                               'پاسخ سرویس تصویر خوانده نشد.')
++        return _parse_image_response(data)
++    raise last_err or AiImageError('GEMINI_UNAVAILABLE',
++                                   'ساخت تصویر ناموفق بود؛ دوباره تلاش کن.')
++
++
++def _image_http_client(timeout: int) -> httpx.AsyncClient:
++    """ساخت کلاینت HTTP لایه‌ی تصویر — هوکِ تست‌پذیری (MockTransport)."""
++    return httpx.AsyncClient(timeout=timeout)
++
++
++async def _img_sleep(seconds: float) -> None:
++    """هوکِ تست‌پذیری برای انتظار بین retryها."""
++    await asyncio.sleep(seconds)
++
++
++def _parse_image_response(data: dict) -> dict:
++    """استخراج تصویر inline از پاسخ generateContent + نگاشت safety.
++    تابع خالص — مستقیماً unit-test می‌شود."""
++    pf = data.get('promptFeedback') or {}
++    if pf.get('blockReason'):
++        raise AiImageError('GEMINI_SAFETY_BLOCK',
++                           'این درخواست قابل پردازش نیست. لطفاً توضیح '
++                           'متفاوتی برای تصویر وارد کنید.')
++    candidates = data.get('candidates') or []
++    if not candidates:
++        raise AiImageError('IMAGE_PARSE_FAILED',
++                           'تصویری تولید نشد؛ دوباره تلاش کن.')
++    cand = candidates[0]
++    if (cand.get('finishReason') or '') in (
++            'SAFETY', 'PROHIBITED_CONTENT', 'BLOCKLIST',
++            'RECITATION', 'SPII'):
++        raise AiImageError('GEMINI_SAFETY_BLOCK',
++                           'این درخواست قابل پردازش نیست. لطفاً توضیح '
++                           'متفاوتی برای تصویر وارد کنید.')
++    parts = ((cand.get('content') or {}).get('parts')) or []
++    for part in parts:
++        inline = part.get('inlineData') or part.get('inline_data')
++        if inline and inline.get('data'):
++            mime = (inline.get('mimeType') or inline.get('mime_type')
++                    or 'image/png')
++            if not mime.startswith('image/'):
++                continue
++            return {'mime': mime, 'data_b64': inline['data']}
++    raise AiImageError('IMAGE_PARSE_FAILED',
++                       'تصویری در پاسخ سرویس پیدا نشد؛ دوباره تلاش کن.')
++
+ # ══════════════════════════════════════════════════
+ #  حافظه‌ی مکالمه — ⚠️ فیکس: قبلاً فقط توی RAM بود و با هر ری‌استارتِ
+ #  سرور (که این چند روز به‌خاطرِ آپدیت‌های پیاپی زیاد اتفاق افتاد)
+@@ -199,6 +367,12 @@
+         # خودِ مدل)، 'high' یعنی برای سوالاتِ سخت بیشتر «فکر کنه» قبل از
+         # جواب — رایگانه، فقط جزوِ توکنِ خروجی حساب می‌شه.
+         'thinking':         raw.get('ai_thinking', 'auto'),
++        # 🎨 تولید تصویر — مدل و سهمیه از settings (بدون hardcode)
++        'image_enabled':    str(raw.get('ai_image_enabled', '1'))
++                            not in ('0', 'false', 'False', ''),
++        'image_model':      raw.get('ai_image_model') or DEFAULT_IMAGE_MODEL,
++        'image_daily_limit': int(raw.get('ai_image_daily_limit',
++                                         DEFAULT_IMAGE_LIMIT) or 0),
+     }
+ 
+ 
+@@ -1480,7 +1654,10 @@
+         "برای چیزای مهم حتماً با منبع درسی یا استاد هم یه چک بزن.\n\n"
+         "هر وقت خواستی بری سراغ کارِ دیگه، کافیه یه دکمه‌ی دیگه از منو رو بزنی — "
+         "من همیشه همینجام 👋",
+-        parse_mode='HTML'
++        parse_mode='HTML',
++        reply_markup=InlineKeyboardMarkup([[
++            InlineKeyboardButton("🎨 ساخت تصویر", callback_data='aiu:imgstart'),
++        ]]) if cfg.get('image_enabled') else None,
+     )
+ 
+ 
+@@ -1804,6 +1981,90 @@
+         logger.exception("ai_release_inflight failed for %s", uid)
+ 
+ 
++async def handle_ai_image_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
++    """🎨 تولید تصویر در بات — متنِ حالتِ ai_image_prompt.
++
++    ترتیبِ گاردها عمداً همین است: ban → enabled → اعتبارسنجی ورودی →
++    سهمیه → قفلِ سراسری → provider؛ سهمیه فقط **بعد از موفقیت** مصرف
++    می‌شود تا شکستِ provider سهمیه‌ی کاربر را نسوزاند.
++    """
++    uid  = update.effective_user.id
++    text = (update.message.text or '').strip()
++    if not text:
++        return
++
++    cfg = await get_ai_config()
++    if not cfg['enabled'] or not cfg.get('image_enabled'):
++        context.user_data.pop('mode', None)
++        await update.message.reply_text(cfg.get('disabled_message') or DEFAULT_DISABLED_MSG)
++        return
++
++    if await db.ai_is_banned(uid):
++        context.user_data.pop('mode', None)
++        await update.message.reply_text(AI_BANNED_MSG, disable_web_page_preview=True)
++        return
++
++    if not (IMAGE_PROMPT_MIN <= len(text) <= IMAGE_PROMPT_MAX):
++        await update.message.reply_text(
++            f"✋ توضیح تصویر باید بین {IMAGE_PROMPT_MIN} و "
++            f"{IMAGE_PROMPT_MAX} نویسه باشه.")
++        return
++
++    img_limit = cfg['image_daily_limit']
++    today = today_tehran().isoformat()
++    if uid != ADMIN_ID and img_limit > 0:
++        used = await db.ai_image_used_today(uid, today)
++        if used >= img_limit:
++            await update.message.reply_text(
++                f"📊 سهمیه‌ی امروزت ({img_limit} تصویر) تموم شده — "
++                "فردا دوباره بیا، یا از حالت پرسش استفاده کن. 💬")
++            return
++
++    claimed = await ai_claim_inflight(uid)
++    if not claimed:
++        await update.message.reply_text(
++            "⏳ یه لحظه! یه درخواست هوش مصنوعی‌ات هنوز در حال انجامه — "
++            "صبر کن تموم شه، بعد اینو بزن.")
++        return
++
++    status = await update.message.reply_text(
++        "🎨 در حال ساخت تصویر... یه لحظه صبر کن 🖌️\n"
++        "(ممکنه تا یک دقیقه طول بکشه)")
++    try:
++        try:
++            res = await generate_image(cfg['api_key'], cfg['image_model'],
++                                       text, '1:1')
++        except AiImageError as e:
++            logger.warning("bot image generation failed uid=%s code=%s",
++                           uid, e.code)
++            await status.edit_text(e.user_message)
++            return
++
++        img_bytes = base64.b64decode(res['data_b64'])
++        from io import BytesIO
++        await update.message.reply_photo(
++            BytesIO(img_bytes), filename='humsyar_image.png',
++            caption=f"🎨 تصویرت آماده شد!\n«{text[:80]}»")
++        if uid != ADMIN_ID and img_limit > 0:
++            try:
++                await db.ai_image_inc(uid, today)
++            except Exception:
++                logger.exception("ثبت مصرف تصویر ناموفق بود uid=%s", uid)
++        try:
++            await status.edit_text("✅ تصویرت ارسال شد!")
++        except Exception:
++            pass  # پیامِ وضعیت پاک نشه — مشکلی نیست
++    except Exception:
++        logger.exception("bot image generation crashed uid=%s", uid)
++        try:
++            await status.edit_text(
++                "❌ یه مشکلِ فنی پیش اومد؛ چند لحظه دیگه دوباره تلاش کن.")
++        except Exception:
++            pass
++    finally:
++        await ai_release_inflight(uid)
++
++
+ async def handle_ai_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+     uid  = update.effective_user.id
+     text = (update.message.text or '').strip()
+@@ -2062,6 +2323,46 @@
+         await query.answer("✅ حافظه‌ی مکالمه (و سندِ مرجعِ فعال، اگه بود) پاک شد؛ از اول شروع کن 🙂", show_alert=True)
+         return
+ 
++    if action == 'imgstart':
++        await query.answer()
++        cfg = await get_ai_config()
++        if not cfg['enabled'] or not cfg.get('image_enabled'):
++            await query.message.reply_text(
++                "🎨 بخشِ ساخت تصویر فعلاً توسط مدیریت غیرفعال است.")
++            return
++        context.user_data['mode'] = 'ai_image_prompt'
++        context.user_data['last_question'] = ''
++        img_limit = cfg['image_daily_limit']
++        if uid == ADMIN_ID or img_limit <= 0:
++            q_line = "🔓 امروز محدودیتی نداری."
++        else:
++            used = await db.ai_image_used_today(uid, today_tehran().isoformat())
++            q_line = f"📊 {used} از {img_limit} تصویرِ امروزت استفاده شده."
++        await query.message.reply_text(
++            "🎨 <b>حالت ساخت تصویر</b>\n\n"
++            "توضیح تصویری که می‌خوای رو <b>همینجا تایپ کن</b> — هرچی "
++            "جزئیات بیشتر بدی، نتیجه بهتر می‌شه:\n\n"
++            "مثلاً: «یک کتابخانه‌ی چوبیِ گرم با نور عصرگاهی، سبک "
++            "واقع‌گرایانه»\n\n"
++            "برای بازگشت به حالت سوال، فقط سوالتو بفرست یا از منو «پرسش از "
++            "هوشیار» رو دوباره بزن.\n"
++            "برای لغو: /cancel",
++            parse_mode='HTML',
++            reply_markup=InlineKeyboardMarkup([
++                [InlineKeyboardButton(
++                    "💬 بازگشت به پرسش", callback_data='aiu:imgoff')],
++            ]),
++        )
++        return
++
++    if action == 'imgoff':
++        await query.answer("💬 برگشتیم به حالت پرسش.", show_alert=False)
++        context.user_data['mode'] = 'ai_query'
++        await query.message.reply_text(
++            "💬 هر سوالی داری بفرست؛ برای ساخت تصویر دوباره از منو یا "
++            "دکمه‌ی 🎨 استفاده کن.")
++        return
++
+     if action == 'fu':
+         fu_type = parts[2] if len(parts) > 2 else ''
+         prompts = {
+--- a/api/routers/ai.py
++++ b/api/routers/ai.py
+@@ -9,6 +9,7 @@
+ 
+ import asyncio
+ import logging
++import os
+ import re
+ from datetime import datetime, timedelta
+ from pathlib import PurePath
+@@ -21,6 +22,10 @@
+     MAX_INPUT_CHARS,
+     MAX_MEDIA_BYTES,
+     AIError,
++    AiImageError,
++    IMAGE_ASPECT_RATIOS,
++    IMAGE_PROMPT_MAX,
++    IMAGE_PROMPT_MIN,
+     ai_claim_inflight,
+     ai_is_inflight,
+     ai_release_inflight,
+@@ -31,6 +36,7 @@
+     _transcode_ogg_opus_to_wav,
+     ask_ai,
+     check_and_consume_quota,
++    generate_image,
+     get_ai_config,
+     record_token_usage,
+ )
+@@ -1700,3 +1706,112 @@
+     return {
+         "ok": True,
+     }
++
++
++# ══════════════════════════════════════════════════════════════
++#  🎨 تولید تصویر با Gemini — همان زیرساخت هوشیار:
++#  ban/enabled/api_key (get_ai_config) + قفل سراسری ai_inflight +
++#  سهمیه‌ی روزانه‌ی مستقل تصویر. کلید API هرگز از این لایه بیرون
++#  نمی‌رود؛ تصویر به‌صورت base64 یک‌بارمصرف برمی‌گردد (بدون فایلِ
++#  ماندگار روی سرور ⇒ بدون نیاز به cleanup).
++# ══════════════════════════════════════════════════════════════
++
++_IMAGE_ERR_STATUS = {
++    'GEMINI_SAFETY_BLOCK': 422,
++    'GEMINI_INVALID_REQUEST': 422,
++    'GEMINI_RATE_LIMIT': 429,
++    'GEMINI_TIMEOUT': 504,
++    'GEMINI_UNAVAILABLE': 502,
++    'GEMINI_AUTH_ERROR': 503,
++    'IMAGE_PARSE_FAILED': 502,
++    'IMAGE_STORAGE_FAILED': 500,
++}
++
++
++class ImageGenBody(BaseModel):
++    prompt: str = Field(..., description="توضیح تصویر")
++    aspect_ratio: str = Field('1:1', description='مثلاً 1:1 یا 16:9')
++
++
++@router.post("/generate-image")
++async def generate_image_ep(body: ImageGenBody,
++                            user=Depends(get_current_user)):
++    import time as _time
++    import uuid as _uuid
++    uid = user["id"]
++    request_id = f"imggen_{_uuid.uuid4().hex[:12]}"
++
++    prompt = (body.prompt or "").strip()
++    if not (IMAGE_PROMPT_MIN <= len(prompt) <= IMAGE_PROMPT_MAX):
++        raise HTTPException(
++            status_code=422,
++            detail=(f"توضیح تصویر باید بین {IMAGE_PROMPT_MIN} و "
++                    f"{IMAGE_PROMPT_MAX} نویسه باشد"))
++    aspect_ratio = (body.aspect_ratio or "1:1").strip()
++    if aspect_ratio not in IMAGE_ASPECT_RATIOS:
++        raise HTTPException(
++            status_code=422,
++            detail="نسبت تصویر معتبر نیست — یکی از: "
++                   + "، ".join(IMAGE_ASPECT_RATIOS))
++
++    config = await _ensure_available(uid)
++    if not config.get("image_enabled"):
++        raise HTTPException(
++            status_code=503, detail="تولید تصویر فعلاً غیرفعال است")
++
++    limit = max(0, int(config.get("image_daily_limit") or 0))
++    today = today_tehran().isoformat()
++    used = await db.ai_image_used_today(uid, today)
++    is_vip = uid == int(os.getenv("ADMIN_ID", "0"))
++    if limit and not is_vip and used >= limit:
++        raise HTTPException(
++            status_code=429,
++            detail=f"سهمیه روزانه ساخت تصویر تمام شده است ({used}/{limit})")
++
++    # یک عملیات AI در لحظه — همان قفل مشترک ربات/مینی‌اپ
++    await _acquire_user(uid)
++    started = _time.monotonic()
++    try:
++        try:
++            res = await generate_image(
++                config["api_key"], config["image_model"], prompt,
++                aspect_ratio)
++        except AiImageError as e:
++            logger.warning(
++                "IMAGE_GENERATION_FAILED rid=%s uid=%s model=%s code=%s "
++                "latency_ms=%s", request_id, uid,
++                config.get("image_model"), e.code,
++                int((_time.monotonic() - started) * 1000))
++            raise HTTPException(
++                status_code=_IMAGE_ERR_STATUS.get(e.code, 502),
++                detail=e.user_message)
++        # سهمیه فقط پس از موفقیت مصرف می‌شود (شکست provider = سهمیه سالم)
++        used_after = used + 1
++        if limit or is_vip:
++            try:
++                used_after = await db.ai_image_inc(uid, today)
++            except Exception:
++                logger.exception("ثبت مصرف تصویر ناموفق بود rid=%s",
++                                 request_id)
++        latency_ms = int((_time.monotonic() - started) * 1000)
++        # prompt کاربر لاگ نمی‌شود (حریم خصوصی) — فقط متادیتا
++        logger.info(
++            "IMAGE_GENERATION_OK rid=%s uid=%s model=%s latency_ms=%s "
++            "bytes_b64=%s", request_id, uid, config.get("image_model"),
++            latency_ms, len(res["data_b64"]))
++        return {
++            "ok": True,
++            "image": res["data_b64"],
++            "mime": res["mime"],
++            "model": config.get("image_model"),
++            "aspect_ratio": aspect_ratio,
++            "usage": {
++                "used_today": used_after,
++                "daily_limit": limit,
++                "remaining": (max(0, limit - used_after) if limit
++                              else None),
++                "unlimited": limit == 0 or is_vip,
++            },
++        }
++    finally:
++        await ai_release_inflight(uid)
+--- a/api/routers/ai_management.py
++++ b/api/routers/ai_management.py
+@@ -48,6 +48,20 @@
+         le=1000,
+     )
+ 
++    image_enabled: bool = True
++
++    image_model: str = Field(
++        default="",
++        min_length=0,
++        max_length=150,
++    )
++
++    image_daily_limit: int = Field(
++        default=10,
++        ge=0,
++        le=1000,
++    )
++
+     thinking: str = Field(
+         pattern="^(auto|high)$"
+     )
+@@ -100,6 +114,15 @@
+         "thinking":
+             value["thinking"],
+ 
++        "image_enabled":
++            value["image_enabled"],
++
++        "image_model":
++            value["image_model"],
++
++        "image_daily_limit":
++            value["image_daily_limit"],
++
+         "system_prompt":
+             value[
+                 "system_prompt"
+@@ -135,6 +158,9 @@
+         "thinking",
+         "system_prompt",
+         "disabled_message",
++        "image_enabled",
++        "image_model",
++        "image_daily_limit",
+     )
+ 
+     for key in editable_fields:
+--- a/db/core.py
++++ b/db/core.py
+@@ -3190,6 +3190,37 @@
+         }
+ 
+ 
++    async def ai_image_used_today(self, uid: int, today: str) -> tuple:
++        """🎨 مصرف امروزِ تصویر (used_today) — سطل تصویر عمداً از سطل
++        چت جداست (ai_image_count/ai_image_date): تصویر گران‌تر است و
++        سهمیه‌ی مستقل می‌خواهد."""
++        u = await self.users.find_one({'user_id': int(uid)},
++                                      {'ai_image_count': 1,
++                                       'ai_image_date': 1})
++        if not u:
++            return 0
++        if u.get('ai_image_date') != today:
++            return 0
++        return int(u.get('ai_image_count') or 0)
++
++    async def ai_image_inc(self, uid: int, today: str) -> int:
++        """🎨 یک واحد مصرف تصویر — **بعد از موفقیت** سرویس صدا زده می‌شود
++        (شکست provider سهمیه‌ی کاربر را نمی‌سوزاند). اتمیک و بدون شرط؛
++        هم‌زمانیِ کاربر با قفل ai_inflight بسته شده است."""
++        await self.users.update_one(
++            {'user_id': int(uid)},
++            [{'$set': {
++                'ai_image_count': {'$cond': [
++                    {'$eq': ['$ai_image_date', today]},
++                    {'$add': [{'$ifNull': ['$ai_image_count', 0]}, 1]}, 1]},
++                'ai_image_date': today,
++                'ai_image_total': {
++                    '$add': [{'$ifNull': ['$ai_image_total', 0]}, 1]},
++            }}])
++        u = await self.users.find_one({'user_id': int(uid)},
++                                      {'ai_image_count': 1})
++        return int((u or {}).get('ai_image_count') or 0)
++
+     async def ai_consume_quota(self, uid: int, daily_limit: int, today: str) -> tuple:
+         """Atomically reserve one AI request across all API/Bot workers.
+ 
+--- a/bot.py
++++ b/bot.py
+@@ -76,7 +76,8 @@
+ from reports import report_callback, handle_report_note_text   # FIX جدید
+ from ai_admin import ai_admin_callback, ai_admin_text_handler   # 🤖 هوشیار
+ from ai_solver import (                                          # 🤖 هوشیار
+-    handle_ai_text, handle_ai_media, ai_user_callback,
++    handle_ai_text, handle_ai_media, handle_ai_image_prompt,
++    ai_user_callback,
+ )
+ from database import db
+ 
+@@ -1508,6 +1509,8 @@
+         return await ai_admin_text_handler(update, context)
+ 
+     # ۴e. 🤖 هوشیار — حالت «پرسش از AI» برای هر کاربر تأییدشده
++    if context.user_data.get('mode') == 'ai_image_prompt':
++        return await handle_ai_image_prompt(update, context)
+     if context.user_data.get('mode') == 'ai_query':
+         return await handle_ai_text(update, context)
+ 
+--- a/miniapp/src/App.jsx
++++ b/miniapp/src/App.jsx
+@@ -140,6 +140,10 @@
+   () => <SkRowList n={4} />
+ );
+ 
++const AiImageScreen = lazyScreen(
++  () => import('./pages/Ai/AiImage'),
++  () => <SkRowList n={3} />
++);
+ 
+ const GlobalSearchScreen = lazyScreen(
+   () => import('./pages/Search/GlobalSearch'),
+@@ -936,6 +940,12 @@
+           }
+         />
+ 
++        <Route
++          path="/ai/image"
++          element={
++            <AiImageScreen />
++          }
++        />
+ 
+         <Route
+           path="/search"
+--- a/miniapp/src/pages/Ai/AiHistory.jsx
++++ b/miniapp/src/pages/Ai/AiHistory.jsx
+@@ -258,6 +258,17 @@
+           شروع گفت‌وگوی جدید
+         </button>
+ 
++        <button
++          type="button"
++          className="conv-new aiimg-entry"
++          onClick={() => {
++            haptic('light');
++            navigate('/ai/image');
++          }}
++        >
++          🎨
++          ساخت تصویر با هوشیار
++        </button>
+ 
+         <SearchField
+           value={query}
+--- a/miniapp/src/pages/Admin/AiAdmin.jsx
++++ b/miniapp/src/pages/Admin/AiAdmin.jsx
+@@ -246,6 +246,11 @@
+                 form.daily_limit
+               ),
+ 
++            image_daily_limit:
++              Number(
++                form.image_daily_limit
++              ),
++
+             api_key: (
+               form.api_key.trim()
+               || null
+@@ -604,6 +609,76 @@
+                 }
+               />
+ 
++
++              <div className="fld-label">
++                🎨 تولید تصویر
++              </div>
++
++              <select
++                className="inp"
++                value={
++                  form.image_enabled
++                    ? 'on'
++                    : 'off'
++                }
++                onChange={(event) =>
++                  setForm({
++                    ...form,
++
++                    image_enabled:
++                      event.target.value
++                      === 'on',
++                  })
++                }
++              >
++                <option value="on">
++                  تولید تصویر فعال
++                </option>
++
++                <option value="off">
++                  تولید تصویر غیرفعال
++                </option>
++              </select>
++
++              <input
++                className="inp"
++                value={
++                  form.image_model
++                }
++                onChange={(event) =>
++                  setForm({
++                    ...form,
++
++                    image_model:
++                      event.target.value,
++                  })
++                }
++                placeholder={
++                  'مدل تصویر (خالی = پیش‌فرض gemini-2.5-flash-image)'
++                }
++              />
++
++              <input
++                className="inp"
++                type="number"
++                min="0"
++                max="1000"
++                value={
++                  form.image_daily_limit
++                }
++                onChange={(event) =>
++                  setForm({
++                    ...form,
++
++                    image_daily_limit:
++                      event.target.value,
++                  })
++                }
++                placeholder={
++                  'سهمیه روزانه تصویر؛ صفر یعنی نامحدود'
++                }
++              />
++
+ 
+               <input
+                 className="inp"
+--- a/miniapp/src/styles/globals.css
++++ b/miniapp/src/styles/globals.css
+@@ -5068,3 +5068,80 @@
+   }
+ }
+ 
++
++/* ─────────────────────────────────────────────
++   🎨 ساخت تصویر (صفحه‌ی AiImage) — W8
++   کاملاً از توکن‌های همان دارک‌مد Design System
++───────────────────────────────────────────── */
++.aiimg-card { display: flex; flex-direction: column; gap: 10px; }
++.aiimg-prompt { resize: vertical; min-height: 92px; }
++.aiimg-count {
++  align-self: flex-start;
++  font-size: 11px;
++  color: var(--txm);
++}
++.aiimg-ratios {
++  display: flex;
++  gap: 6px;
++  overflow-x: auto;
++  padding-bottom: 2px;
++  -webkit-overflow-scrolling: touch;
++}
++.aiimg-chip {
++  flex: 0 0 auto;
++  border: 1px solid var(--bd);
++  background: var(--elev);
++  color: var(--tx2);
++  border-radius: 999px;
++  padding: 6px 12px;
++  font-size: 12px;
++  cursor: pointer;
++}
++.aiimg-chip--on {
++  border-color: var(--bdg);
++  background: var(--acc-soft);
++  color: var(--tx);
++}
++.aiimg-chip:disabled { opacity: .5; }
++.aiimg-go { margin-top: 4px; }
++.aiimg-quota { font-size: 12px; color: var(--txm); text-align: center; }
++.aiimg-error {
++  color: var(--err);
++  font-size: 13px;
++  line-height: 1.8;
++}
++.aiimg-loading {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  gap: 8px;
++  padding: 26px 16px;
++  color: var(--tx2);
++  font-size: 13px;
++}
++.aiimg-hint { color: var(--txm); font-size: 11px; }
++.aiimg-spin {
++  width: 34px; height: 34px;
++  border-radius: 50%;
++  border: 3px solid var(--bd);
++  border-top-color: var(--acc);
++  animation: aiimg-rotate .9s linear infinite;
++}
++@keyframes aiimg-rotate { to { transform: rotate(360deg); } }
++.aiimg-img {
++  width: 100%;
++  max-width: 520px;
++  display: block;
++  margin: 0 auto;
++  border-radius: var(--r-md);
++}
++.aiimg-actions {
++  display: flex;
++  gap: 8px;
++  margin-top: 10px;
++}
++.aiimg-actions .btn { flex: 1; text-align: center; text-decoration: none; }
++.aiimg-entry {
++  background: var(--acc-soft);
++  border-color: var(--bdg);
++}
